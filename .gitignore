@@ -1,0 +1,12 @@
+# Discord data packages - never commit personal data
+*.zip
+package/
+
+# Generated output
+*_stats.html
+discord_viewer/
+
+# Python
+__pycache__/
+*.pyc
+.DS_Store
