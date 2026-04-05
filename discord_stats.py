@@ -341,9 +341,9 @@ def build_html(stats: dict, user: dict) -> str:
     dow_labels = json.dumps([d for d, _ in stats["daily_dow"]])
     dow_values = json.dumps([v for _, v in stats["daily_dow"]])
 
-    # Top DMs bar chart
-    dm_labels = json.dumps([d["name"][:20] for d in stats["top_dms"][:15]])
-    dm_values = json.dumps([d["count"] for d in stats["top_dms"][:15]])
+    # Top DMs bar chart — use 25 to match the table
+    dm_labels = json.dumps([d["name"][:20] for d in stats["top_dms"][:25]])
+    dm_values = json.dumps([d["count"] for d in stats["top_dms"][:25]])
 
     # Top servers bar chart
     srv_labels = json.dumps([s["name"][:25] for s in stats["top_servers"][:15]])
@@ -394,96 +394,220 @@ def build_html(stats: dict, user: dict) -> str:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Discord Stats &mdash; {escape(username)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=DM+Sans:ital,wght@0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <style>
+:root {{
+  --bg-deep: #0b1120;
+  --bg-mid: #111a2e;
+  --glass: rgba(255,255,255,0.04);
+  --glass-border: rgba(255,255,255,0.09);
+  --glass-hover: rgba(255,255,255,0.07);
+  --accent: #6ea8fe;
+  --accent-bright: #8ec5ff;
+  --accent-glow: rgba(110,168,254,0.25);
+  --rose: #ff6b8a;
+  --rose-glow: rgba(255,107,138,0.2);
+  --amber: #fbbf24;
+  --amber-glow: rgba(251,191,36,0.15);
+  --teal: #2dd4bf;
+  --text-primary: #eeeef4;
+  --text-secondary: #8b8ba7;
+  --text-dim: #5a5a78;
+  --radius: 16px;
+  --radius-sm: 10px;
+}}
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+html {{ scroll-behavior: smooth; }}
 body {{
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", Ubuntu, sans-serif;
-  background: #1a1a2e; color: #e0e0e0; line-height: 1.5;
+  font-family: "DM Sans", system-ui, sans-serif;
+  background: var(--bg-deep); color: var(--text-primary); line-height: 1.6;
+  min-height: 100vh;
+  background-image:
+    radial-gradient(ellipse 80% 60% at 20% 10%, rgba(110,168,254,0.1) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 50% at 80% 80%, rgba(255,107,138,0.06) 0%, transparent 50%),
+    radial-gradient(ellipse 50% 40% at 50% 50%, rgba(45,212,191,0.04) 0%, transparent 50%);
+  background-attachment: fixed;
 }}
-.container {{ max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }}
 
-/* Header */
+/* Noise overlay */
+body::before {{
+  content: "";
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 128px 128px;
+}}
+
+.container {{ max-width: 1120px; margin: 0 auto; padding: 0 24px 80px; position: relative; z-index: 1; }}
+
+/* ---- Header ---- */
 .header {{
-  text-align: center; padding: 48px 0 32px;
-  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-  border-bottom: 2px solid #5865f2;
-  margin-bottom: 32px;
+  text-align: center; padding: 72px 24px 48px; position: relative; z-index: 1;
+  margin-bottom: 40px;
 }}
-.header h1 {{ font-size: 28px; color: #fff; margin-bottom: 4px; }}
-.header .sub {{ color: #949ba4; font-size: 14px; }}
+.header::after {{
+  content: "";
+  position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
+  width: 120px; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+}}
+.header h1 {{
+  font-family: "Outfit", sans-serif; font-weight: 800; font-size: 38px;
+  color: #fff; letter-spacing: -0.02em;
+  background: linear-gradient(135deg, #fff 40%, var(--accent-bright));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}}
+.header .sub {{
+  font-family: "DM Sans", sans-serif;
+  color: var(--text-secondary); font-size: 16px; margin-top: 8px;
+  letter-spacing: 0.02em;
+}}
 
-/* Cards */
-.card {{
-  background: #222244; border-radius: 12px; padding: 24px;
-  margin-bottom: 20px; border: 1px solid #333366;
+/* ---- Reveal animations ---- */
+.card {{ opacity: 0; transform: translateY(24px); animation: reveal 0.6s ease forwards; }}
+.card:nth-child(1) {{ animation-delay: 0.05s; }}
+.card:nth-child(2) {{ animation-delay: 0.12s; }}
+.card:nth-child(3) {{ animation-delay: 0.19s; }}
+.card:nth-child(4) {{ animation-delay: 0.26s; }}
+.card:nth-child(5) {{ animation-delay: 0.33s; }}
+.card:nth-child(6) {{ animation-delay: 0.40s; }}
+.card:nth-child(7) {{ animation-delay: 0.47s; }}
+@keyframes reveal {{
+  to {{ opacity: 1; transform: translateY(0); }}
 }}
+
+/* ---- Cards (glassmorphism) ---- */
+.card {{
+  background: var(--glass);
+  backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+  border-radius: var(--radius); padding: 28px 32px;
+  margin-bottom: 24px;
+  border: 1px solid var(--glass-border);
+  transition: border-color 0.3s ease;
+}}
+.card:hover {{ border-color: rgba(255,255,255,0.13); }}
 .card h2 {{
-  font-size: 16px; text-transform: uppercase; letter-spacing: 0.05em;
-  color: #5865f2; margin-bottom: 16px; font-weight: 700;
+  font-family: "Outfit", sans-serif; font-weight: 600; font-size: 15px;
+  text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--accent); margin-bottom: 20px;
 }}
 .card h3 {{
-  font-size: 14px; color: #949ba4; margin-bottom: 12px; font-weight: 600;
+  font-family: "Outfit", sans-serif; font-weight: 400; font-size: 15px;
+  color: var(--text-secondary); margin-bottom: 14px; letter-spacing: 0.04em;
 }}
 
-/* Stat grid */
+/* ---- Stat grid ---- */
 .stat-grid {{
   display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 16px; margin-bottom: 8px;
+  gap: 14px;
 }}
 .stat-box {{
-  background: #1a1a3a; border-radius: 10px; padding: 16px; text-align: center;
-  border: 1px solid #2a2a5a;
+  background: rgba(255,255,255,0.025); border-radius: var(--radius-sm);
+  padding: 22px 12px; text-align: center;
+  border: 1px solid rgba(255,255,255,0.05);
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
 }}
-.stat-box .num {{ font-size: 28px; font-weight: 700; color: #fff; }}
-.stat-box .label {{ font-size: 12px; color: #949ba4; margin-top: 2px; }}
+.stat-box:hover {{
+  transform: translateY(-3px);
+  box-shadow: 0 8px 32px rgba(110,168,254,0.1);
+}}
+.stat-box .num {{
+  font-family: "Outfit", sans-serif; font-weight: 800;
+  font-size: 28px; color: #fff; line-height: 1.1;
+  white-space: nowrap;
+}}
+@media (min-width: 900px) {{ .stat-box .num {{ font-size: 32px; }} }}
+.stat-box .label {{
+  font-size: 13px; color: var(--text-dim); margin-top: 6px;
+  text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500;
+}}
 
-/* Fun facts */
+/* ---- Fun facts ---- */
 .fun-facts {{
   display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 12px;
 }}
 .fact {{
-  background: #1a1a3a; border-radius: 8px; padding: 14px 16px;
-  border-left: 3px solid #5865f2; font-size: 14px;
+  background: rgba(255,255,255,0.02); border-radius: var(--radius-sm);
+  padding: 16px 18px; font-size: 15px;
+  border-left: 3px solid var(--accent);
+  transition: background 0.2s ease;
 }}
-.fact .val {{ color: #fff; font-weight: 600; }}
+.fact:hover {{ background: rgba(255,255,255,0.04); }}
+.fact .val {{ color: #fff; font-weight: 700; }}
 
-/* Charts */
+/* ---- Chart layout ---- */
 .chart-row {{
-  display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
 }}
-@media (max-width: 700px) {{ .chart-row {{ grid-template-columns: 1fr; }} }}
+@media (max-width: 720px) {{ .chart-row {{ grid-template-columns: 1fr; }} }}
 .chart-box {{
-  background: #1a1a3a; border-radius: 10px; padding: 16px;
-  border: 1px solid #2a2a5a; position: relative;
+  background: rgba(255,255,255,0.02); border-radius: var(--radius-sm);
+  padding: 20px; border: 1px solid rgba(255,255,255,0.04);
+  position: relative;
 }}
 .chart-box canvas {{ max-height: 300px; }}
 .chart-wide {{ grid-column: 1 / -1; }}
-.chart-wide canvas {{ max-height: 250px; }}
+.chart-wide canvas {{ max-height: 260px; }}
+.chart-subtitle {{
+  font-size: 13px; color: var(--text-dim); text-align: center;
+  margin-bottom: 10px; letter-spacing: 0.03em;
+}}
 
-/* Tables */
-table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
-th {{ text-align: left; color: #949ba4; font-weight: 600; padding: 8px 12px; border-bottom: 1px solid #333366; font-size: 12px; text-transform: uppercase; }}
-td {{ padding: 8px 12px; border-bottom: 1px solid #2a2a4a; }}
-tr:hover {{ background: #2a2a4a; }}
-.rank {{ color: #5865f2; font-weight: 700; width: 30px; }}
-.num {{ text-align: right; font-weight: 600; color: #fff; white-space: nowrap; }}
-.server {{ color: #949ba4; font-size: 12px; }}
+/* ---- Tables ---- */
+table {{ width: 100%; border-collapse: collapse; font-size: 15px; }}
+th {{
+  text-align: left; color: var(--text-dim); font-weight: 600;
+  padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.06);
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em;
+}}
+td {{
+  padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.03);
+  transition: background 0.15s ease;
+}}
+tr:hover td {{ background: rgba(255,255,255,0.03); }}
+.rank {{ color: var(--accent); font-weight: 700; width: 32px; font-family: "Outfit", sans-serif; }}
+.num {{ text-align: right; font-weight: 600; color: #fff; white-space: nowrap; font-family: "Outfit", sans-serif; font-size: 15px; }}
+.server {{ color: var(--text-dim); font-size: 13px; }}
 
-/* Tags */
+/* ---- Word & emoji chips ---- */
 .word-chip, .emoji-chip {{
-  display: inline-block; background: #1a1a3a; border: 1px solid #2a2a5a;
-  border-radius: 20px; padding: 4px 12px; margin: 3px; font-size: 13px;
+  display: inline-block;
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 24px; padding: 6px 16px; margin: 4px; font-size: 14px;
+  transition: background 0.2s ease, transform 0.15s ease;
 }}
-.word-chip b, .emoji-chip b {{ color: #5865f2; margin-left: 4px; }}
-.emoji-chip {{ font-size: 16px; }}
+.word-chip:hover, .emoji-chip:hover {{
+  background: rgba(110,168,254,0.1); transform: translateY(-1px);
+}}
+.word-chip b, .emoji-chip b {{ color: var(--accent); margin-left: 5px; }}
+.emoji-chip {{ font-size: 18px; }}
 
-/* Two column layout */
+/* ---- Two column layout ---- */
 .two-col {{
-  display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
 }}
-@media (max-width: 700px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
+@media (max-width: 720px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
+
+/* ---- Night owl / early bird box ---- */
+.persona-box {{
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.02); border-radius: var(--radius-sm);
+  border: 1px solid rgba(255,255,255,0.04); padding: 24px;
+}}
+.persona-icon {{ font-size: 52px; margin-bottom: 10px; }}
+.persona-label {{
+  font-family: "Outfit", sans-serif; font-weight: 600;
+  font-size: 22px; color: #fff;
+}}
+.persona-detail {{
+  color: var(--text-secondary); font-size: 15px; margin-top: 6px; line-height: 1.4;
+}}
 </style>
 </head>
 <body>
@@ -492,7 +616,7 @@ tr:hover {{ background: #2a2a4a; }}
   <h1>{escape(username)}&rsquo;s Discord Wrapped</h1>
   <div class="sub">
     {escape(stats["first_message"][:10])} &mdash; {escape(stats["last_message"][:10])}
-    &middot; {stats["active_days"]:,} active days
+    &nbsp;&middot;&nbsp; {stats["active_days"]:,} active days
   </div>
 </div>
 
@@ -521,7 +645,7 @@ tr:hover {{ background: #2a2a4a; }}
     <div class="fact">Favorite day: <span class="val">{peak_dow[0]}</span> ({peak_dow[1]:,} messages)</div>
     <div class="fact">Avg message length: <span class="val">{stats["avg_msg_length"]}</span> chars</div>
     <div class="fact">Longest message: <span class="val">{stats["max_msg_length"]:,}</span> characters</div>
-    <div class="fact">You&rsquo;re a <span class="val">{"Night Owl 🦉" if tod["night"] + tod["evening"] > tod["morning"] + tod["afternoon"] else "Early Bird 🐦"}</span> &mdash; {tod["night"]+tod["evening"]:,} evening/night vs {tod["morning"]+tod["afternoon"]:,} morning/afternoon messages</div>
+    <div class="fact">You&rsquo;re a <span class="val">{"Night Owl" if tod["night"] + tod["evening"] > tod["morning"] + tod["afternoon"] else "Early Bird"}</span> &mdash; {tod["night"]+tod["evening"]:,} evening/night vs {tod["morning"]+tod["afternoon"]:,} morning/afternoon messages</div>
   </div>
 </div>
 
@@ -529,7 +653,10 @@ tr:hover {{ background: #2a2a4a; }}
 <div class="card">
   <h2>Activity Over Time</h2>
   <div class="chart-row">
-    <div class="chart-box chart-wide"><canvas id="monthlyChart"></canvas></div>
+    <div class="chart-box chart-wide">
+      <div class="chart-subtitle">Messages you sent per month &mdash; only outgoing messages are included in Discord data exports</div>
+      <canvas id="monthlyChart"></canvas>
+    </div>
     <div class="chart-box"><canvas id="hourlyChart"></canvas></div>
     <div class="chart-box"><canvas id="dowChart"></canvas></div>
   </div>
@@ -540,11 +667,11 @@ tr:hover {{ background: #2a2a4a; }}
   <h2>When You Chat</h2>
   <div class="chart-row">
     <div class="chart-box"><canvas id="todChart"></canvas></div>
-    <div class="chart-box" style="display:flex;align-items:center;justify-content:center;">
+    <div class="persona-box">
       <div style="text-align:center;">
-        <div style="font-size:48px;margin-bottom:8px;">{"🦉" if tod["night"] + tod["evening"] > tod["morning"] + tod["afternoon"] else "🐦"}</div>
-        <div style="font-size:20px;font-weight:700;color:#fff;">{"Night Owl" if tod["night"] + tod["evening"] > tod["morning"] + tod["afternoon"] else "Early Bird"}</div>
-        <div style="color:#949ba4;font-size:13px;margin-top:4px;">
+        <div class="persona-icon">{"&#x1F989;" if tod["night"] + tod["evening"] > tod["morning"] + tod["afternoon"] else "&#x1F426;"}</div>
+        <div class="persona-label">{"Night Owl" if tod["night"] + tod["evening"] > tod["morning"] + tod["afternoon"] else "Early Bird"}</div>
+        <div class="persona-detail">
           {max(tod.values()) / sum(tod.values()) * 100:.0f}% of your messages are in the
           {max(tod, key=tod.get).replace("night","late night").replace("evening","evening")} hours
         </div>
@@ -555,11 +682,11 @@ tr:hover {{ background: #2a2a4a; }}
 
 <!-- Top Friends -->
 <div class="card">
-  <h2>Top Friends (by DM messages you sent)</h2>
+  <h2>Top Friends &mdash; DM messages you sent</h2>
   <div class="chart-row">
     <div class="chart-box chart-wide"><canvas id="dmChart"></canvas></div>
   </div>
-  <div class="two-col" style="margin-top:16px;">
+  <div class="two-col" style="margin-top:20px;">
     <div>
       <h3>Top DM Conversations</h3>
       <table>
@@ -583,7 +710,7 @@ tr:hover {{ background: #2a2a4a; }}
   <div class="chart-row">
     <div class="chart-box chart-wide"><canvas id="srvChart"></canvas></div>
   </div>
-  <div class="two-col" style="margin-top:16px;">
+  <div class="two-col" style="margin-top:20px;">
     <div>
       <h3>By Server</h3>
       <table>
@@ -611,7 +738,7 @@ tr:hover {{ background: #2a2a4a; }}
     </div>
     <div>
       <h3>Most Used Emoji</h3>
-      <div>{top_emoji_html if top_emoji_html else '<span style="color:#949ba4">No emoji found</span>'}</div>
+      <div>{top_emoji_html if top_emoji_html else '<span style="color:var(--text-dim)">No emoji found</span>'}</div>
     </div>
   </div>
 </div>
@@ -619,23 +746,42 @@ tr:hover {{ background: #2a2a4a; }}
 </div>
 
 <script>
-Chart.defaults.color = "#949ba4";
-Chart.defaults.borderColor = "#2a2a5a";
-const purple = "#5865f2";
-const purpleAlpha = "rgba(88,101,242,0.3)";
+Chart.defaults.color = "#8b8ba7";
+Chart.defaults.borderColor = "rgba(255,255,255,0.05)";
+Chart.defaults.font.family = "'DM Sans', system-ui, sans-serif";
+const accent = "#6ea8fe";
+const accentAlpha = "rgba(110,168,254,0.25)";
+const rose = "#ff6b8a";
+const amber = "#fbbf24";
+const teal = "#2dd4bf";
+function fmtNum(v) {{ return v.toLocaleString(); }}
+function widenAxis(axis) {{ if (axis.width < 58) axis.width = 58; }}
+function widenLabelAxis(axis) {{ if (axis.width < 180) axis.width = 180; }}
 
 // Monthly activity
 new Chart(document.getElementById("monthlyChart"), {{
   type: "line",
   data: {{
     labels: {monthly_labels},
-    datasets: [{{ label: "Messages", data: {monthly_values}, borderColor: purple, backgroundColor: purpleAlpha, fill: true, tension: 0.3, pointRadius: 0 }}]
+    datasets: [{{
+      label: "Messages sent",
+      data: {monthly_values},
+      borderColor: accent,
+      backgroundColor: (ctx) => {{
+        const g = ctx.chart.ctx.createLinearGradient(0, 0, 0, ctx.chart.height);
+        g.addColorStop(0, "rgba(110,168,254,0.3)");
+        g.addColorStop(1, "rgba(110,168,254,0.0)");
+        return g;
+      }},
+      fill: true, tension: 0.35, pointRadius: 0, borderWidth: 2
+    }}]
   }},
   options: {{
+
     plugins: {{ legend: {{ display: false }} }},
     scales: {{
-      x: {{ ticks: {{ maxTicksLimit: 20 }} }},
-      y: {{ beginAtZero: true }}
+      x: {{ ticks: {{ maxTicksLimit: 18, font: {{ size: 12 }} }}, grid: {{ display: false }} }},
+      y: {{ afterFit: widenAxis, beginAtZero: true, ticks: {{ font: {{ size: 12 }}, callback: function(v) {{ return fmtNum(v); }} }}, grid: {{ color: "rgba(255,255,255,0.03)" }} }}
     }}
   }}
 }});
@@ -645,11 +791,17 @@ new Chart(document.getElementById("hourlyChart"), {{
   type: "bar",
   data: {{
     labels: {hourly_labels},
-    datasets: [{{ label: "Messages", data: {hourly_values}, backgroundColor: purple, borderRadius: 4 }}]
+    datasets: [{{ label: "Messages", data: {hourly_values}, backgroundColor: accent, borderRadius: 6, borderSkipped: false }}]
   }},
   options: {{
-    plugins: {{ legend: {{ display: false }}, title: {{ display: true, text: "By Hour of Day" }} }},
-    scales: {{ y: {{ beginAtZero: true }} }}
+    plugins: {{
+      legend: {{ display: false }},
+      title: {{ display: true, text: "By Hour of Day", font: {{ family: "'Outfit', sans-serif", size: 13, weight: 400 }}, padding: {{ bottom: 12 }} }}
+    }},
+    scales: {{
+      x: {{ grid: {{ display: false }}, ticks: {{ font: {{ size: 11 }} }} }},
+      y: {{ afterFit: widenAxis, beginAtZero: true, ticks: {{ font: {{ size: 12 }}, callback: function(v) {{ return fmtNum(v); }} }}, grid: {{ color: "rgba(255,255,255,0.03)" }} }}
+    }}
   }}
 }});
 
@@ -658,11 +810,17 @@ new Chart(document.getElementById("dowChart"), {{
   type: "bar",
   data: {{
     labels: {dow_labels},
-    datasets: [{{ label: "Messages", data: {dow_values}, backgroundColor: "#e94560", borderRadius: 4 }}]
+    datasets: [{{ label: "Messages", data: {dow_values}, backgroundColor: rose, borderRadius: 6, borderSkipped: false }}]
   }},
   options: {{
-    plugins: {{ legend: {{ display: false }}, title: {{ display: true, text: "By Day of Week" }} }},
-    scales: {{ y: {{ beginAtZero: true }} }}
+    plugins: {{
+      legend: {{ display: false }},
+      title: {{ display: true, text: "By Day of Week", font: {{ family: "'Outfit', sans-serif", size: 13, weight: 400 }}, padding: {{ bottom: 12 }} }}
+    }},
+    scales: {{
+      x: {{ grid: {{ display: false }}, ticks: {{ font: {{ size: 12 }} }} }},
+      y: {{ afterFit: widenAxis, beginAtZero: true, ticks: {{ font: {{ size: 12 }}, callback: function(v) {{ return fmtNum(v); }} }}, grid: {{ color: "rgba(255,255,255,0.03)" }} }}
+    }}
   }}
 }});
 
@@ -671,11 +829,17 @@ new Chart(document.getElementById("todChart"), {{
   type: "doughnut",
   data: {{
     labels: {tod_labels},
-    datasets: [{{ data: {tod_values}, backgroundColor: ["#16213e","#e94560","#f5a623","#5865f2"], borderWidth: 0 }}]
+    datasets: [{{
+      data: {tod_values},
+      backgroundColor: ["#334155", rose, amber, accent],
+      borderWidth: 0,
+      hoverOffset: 8
+    }}]
   }},
   options: {{
-    plugins: {{ legend: {{ position: "bottom" }} }},
-    cutout: "60%"
+
+    plugins: {{ legend: {{ position: "bottom", labels: {{ padding: 16, usePointStyle: true, pointStyle: "circle", font: {{ size: 13 }} }} }} }},
+    cutout: "65%"
   }}
 }});
 
@@ -684,12 +848,16 @@ new Chart(document.getElementById("dmChart"), {{
   type: "bar",
   data: {{
     labels: {dm_labels},
-    datasets: [{{ label: "Messages", data: {dm_values}, backgroundColor: "#e94560", borderRadius: 4 }}]
+    datasets: [{{ label: "Messages", data: {dm_values}, backgroundColor: rose, borderRadius: 6, borderSkipped: false }}]
   }},
   options: {{
     indexAxis: "y",
+    layout: {{ padding: {{ right: 120 }} }},
     plugins: {{ legend: {{ display: false }} }},
-    scales: {{ x: {{ beginAtZero: true }} }}
+    scales: {{
+      x: {{ afterFit: widenAxis, beginAtZero: true, ticks: {{ font: {{ size: 12 }}, callback: function(v) {{ return fmtNum(v); }} }}, grid: {{ color: "rgba(255,255,255,0.03)" }} }},
+      y: {{ afterFit: widenLabelAxis, grid: {{ display: false }}, ticks: {{ font: {{ size: 12 }} }} }}
+    }}
   }}
 }});
 
@@ -698,12 +866,16 @@ new Chart(document.getElementById("srvChart"), {{
   type: "bar",
   data: {{
     labels: {srv_labels},
-    datasets: [{{ label: "Messages", data: {srv_values}, backgroundColor: purple, borderRadius: 4 }}]
+    datasets: [{{ label: "Messages", data: {srv_values}, backgroundColor: accent, borderRadius: 6, borderSkipped: false }}]
   }},
   options: {{
     indexAxis: "y",
+    layout: {{ padding: {{ right: 120 }} }},
     plugins: {{ legend: {{ display: false }} }},
-    scales: {{ x: {{ beginAtZero: true }} }}
+    scales: {{
+      x: {{ afterFit: widenAxis, beginAtZero: true, ticks: {{ font: {{ size: 12 }}, callback: function(v) {{ return fmtNum(v); }} }}, grid: {{ color: "rgba(255,255,255,0.03)" }} }},
+      y: {{ afterFit: widenLabelAxis, grid: {{ display: false }}, ticks: {{ font: {{ size: 12 }} }} }}
+    }}
   }}
 }});
 </script>
