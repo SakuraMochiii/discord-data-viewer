@@ -5,10 +5,65 @@ import json
 import re
 import sys
 import zipfile
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime
 from html import escape
 from pathlib import Path
+
+CH_DM = "DM"
+CH_GROUP_DM = "GROUP_DM"
+
+_WORD_RE = re.compile(r"[a-zA-Z']+")
+_EMOJI_RE = re.compile(
+    "(?:"
+    "["
+    "\U0001F600-\U0001F64F"
+    "\U0001F300-\U0001F5FF"
+    "\U0001F680-\U0001F6FF"
+    "\U0001F900-\U0001F9FF"
+    "\U0001FA00-\U0001FA6F"
+    "\U0001FA70-\U0001FAFF"
+    "\U00002702-\U000027B0"
+    "\U0000FE00-\U0000FE0F"
+    "\U0000200D"
+    "\U00002640-\U00002642"
+    "\U00002600-\U000026FF"
+    "]+"
+    "|<a?:\\w+:\\d+>"
+    "|:[a-zA-Z0-9_]+:"
+    ")",
+    flags=re.UNICODE,
+)
+
+STOPWORDS = {
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "shall", "can", "to", "of", "in", "for",
+    "on", "with", "at", "by", "from", "as", "into", "through", "during",
+    "before", "after", "and", "but", "or", "nor", "not", "so", "yet",
+    "both", "either", "neither", "each", "every", "all", "any", "few",
+    "more", "most", "other", "some", "such", "no", "only", "own", "same",
+    "than", "too", "very", "just", "i", "me", "my", "we", "our", "you",
+    "your", "he", "him", "his", "she", "her", "it", "its", "they", "them",
+    "their", "what", "which", "who", "whom", "this", "that", "these",
+    "those", "am", "if", "then", "else", "when", "up", "out", "about",
+    "how", "why", "where", "there", "here", "also", "like", "oh", "im",
+    "ok", "yeah", "dont", "thats", "lol", "omg", "u", "ur",
+}
+
+
+def _top_n(items, *, key="name", n=20):
+    """Sort items by 'count' descending and return top n."""
+    return sorted(items, key=lambda x: -x["count"])[:n]
+
+
+def _rank_table_rows(items, extra_col=None):
+    """Build HTML table rows with rank, name, optional extra column, and count."""
+    rows = ""
+    for i, item in enumerate(items, 1):
+        extra = f'<td class="server">{escape(item[extra_col])}</td>' if extra_col else ""
+        rows += f'<tr><td class="rank">{i}</td><td>{escape(item["name"])}</td>{extra}<td class="num">{item["count"]:,}</td></tr>'
+    return rows
 
 
 def parse_package(zip_path: str) -> dict:
@@ -62,15 +117,12 @@ def parse_package(zip_path: str) -> dict:
             guild_name = guild.get("name", "") if guild else ""
             ch_name = meta.get("name", "")
 
-            # Resolve display name from index
             idx_val = index.get(channel_id, "")
-            if ch_type == "DM":
-                # Extract friend name from "Direct Message with username#0"
+            if ch_type == CH_DM:
                 m = re.match(r"Direct Message with (.+?)(?:#\d+)?$", idx_val)
-                friend_name = m.group(1) if m else idx_val.replace("Direct Message with ", "")
-                display = friend_name
+                display = m.group(1) if m else idx_val
                 group = "Direct Messages"
-            elif ch_type == "GROUP_DM":
+            elif ch_type == CH_GROUP_DM:
                 display = ch_name or idx_val or "Group DM"
                 group = "Group DMs"
             else:
@@ -104,166 +156,123 @@ def compute_stats(data: dict) -> dict:
     """Compute all the analytics."""
     channels = data["channels"]
     messages = data["messages"]
-    user = data["user"]
-
     stats = {}
 
-    # --- Overview ---
+    dm_types = {CH_DM, CH_GROUP_DM}
+
     stats["total_messages"] = len(messages)
     stats["total_channels"] = len(channels)
-    stats["total_dms"] = sum(1 for c in channels if c["type"] == "DM")
-    stats["total_group_dms"] = sum(1 for c in channels if c["type"] == "GROUP_DM")
+    stats["total_dms"] = sum(1 for c in channels if c["type"] == CH_DM)
+    stats["total_group_dms"] = sum(1 for c in channels if c["type"] == CH_GROUP_DM)
     stats["total_servers"] = len(set(
-        c["group"] for c in channels
-        if c["type"] not in ("DM", "GROUP_DM")
+        c["group"] for c in channels if c["type"] not in dm_types
     ))
 
-    # --- Top DM friends by message count ---
-    dm_counts = []
-    for c in channels:
-        if c["type"] == "DM" and c["message_count"] > 0:
-            dm_counts.append({"name": c["name"], "count": c["message_count"]})
-    dm_counts.sort(key=lambda x: -x["count"])
-    stats["top_dms"] = dm_counts[:25]
+    stats["top_dms"] = _top_n(
+        [{"name": c["name"], "count": c["message_count"]}
+         for c in channels if c["type"] == CH_DM and c["message_count"] > 0],
+        n=25,
+    )
+    stats["top_group_dms"] = _top_n(
+        [{"name": c["name"], "count": c["message_count"]}
+         for c in channels if c["type"] == CH_GROUP_DM and c["message_count"] > 0],
+        n=15,
+    )
 
-    # --- Top Group DMs ---
-    gdm_counts = []
+    server_msgs = Counter()
     for c in channels:
-        if c["type"] == "GROUP_DM" and c["message_count"] > 0:
-            gdm_counts.append({"name": c["name"], "count": c["message_count"]})
-    gdm_counts.sort(key=lambda x: -x["count"])
-    stats["top_group_dms"] = gdm_counts[:15]
-
-    # --- Top servers by message count ---
-    server_msgs = defaultdict(int)
-    for c in channels:
-        if c["type"] not in ("DM", "GROUP_DM"):
+        if c["type"] not in dm_types:
             server_msgs[c["group"]] += c["message_count"]
-    stats["top_servers"] = sorted(
+    stats["top_servers"] = _top_n(
         [{"name": k, "count": v} for k, v in server_msgs.items() if v > 0],
-        key=lambda x: -x["count"]
-    )[:20]
+        n=20,
+    )
 
-    # --- Top channels (server channels) ---
-    ch_counts = []
-    for c in channels:
-        if c["type"] not in ("DM", "GROUP_DM") and c["message_count"] > 0:
-            ch_counts.append({
-                "name": c["name"],
-                "server": c["group"],
-                "count": c["message_count"],
-            })
-    ch_counts.sort(key=lambda x: -x["count"])
-    stats["top_channels"] = ch_counts[:20]
+    stats["top_channels"] = _top_n(
+        [{"name": c["name"], "server": c["group"], "count": c["message_count"]}
+         for c in channels if c["type"] not in dm_types and c["message_count"] > 0],
+        n=20,
+    )
 
-    # --- Activity over time ---
-    # Messages per month
+    # Single pass over all messages for every per-message stat
     monthly = Counter()
     hourly = Counter()
     daily_dow = Counter()
     yearly = Counter()
+    day_counts = Counter()
+    word_counter = Counter()
+    emoji_counter = Counter()
     dow_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    total_chars = 0
+    total_words = 0
+    max_msg_len = 0
+    msg_with_content = 0
+    attachment_count = 0
+    min_ts = None
+    max_ts = None
 
     for msg in messages:
         ts = msg.get("Timestamp", "")
-        if not ts:
-            continue
-        try:
-            dt = datetime.strptime(ts[:19], "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            continue
-        monthly[dt.strftime("%Y-%m")] += 1
-        hourly[dt.hour] += 1
-        daily_dow[dt.weekday()] += 1
-        yearly[dt.year] += 1
+        if ts:
+            if min_ts is None or ts < min_ts:
+                min_ts = ts
+            if max_ts is None or ts > max_ts:
+                max_ts = ts
+            day_counts[ts[:10]] += 1
+            try:
+                dt = datetime.strptime(ts[:19], "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                pass
+            else:
+                monthly[dt.strftime("%Y-%m")] += 1
+                hourly[dt.hour] += 1
+                daily_dow[dt.weekday()] += 1
+                yearly[dt.year] += 1
+
+        text = msg.get("Contents", "")
+        if text:
+            length = len(text)
+            total_chars += length
+            if length > max_msg_len:
+                max_msg_len = length
+            total_words += len(text.split())
+            msg_with_content += 1
+
+            for w in _WORD_RE.findall(text.lower()):
+                if len(w) >= 2 and w not in STOPWORDS:
+                    word_counter[w] += 1
+
+            for match in _EMOJI_RE.findall(text):
+                emoji_counter[match] += 1
+
+        if msg.get("Attachments"):
+            attachment_count += 1
 
     stats["monthly"] = sorted(monthly.items())
     stats["hourly"] = [(h, hourly.get(h, 0)) for h in range(24)]
     stats["daily_dow"] = [(dow_names[d], daily_dow.get(d, 0)) for d in range(7)]
     stats["yearly"] = sorted(yearly.items())
 
-    # --- Message length stats ---
-    lengths = [len(msg.get("Contents", "")) for msg in messages if msg.get("Contents")]
-    if lengths:
-        stats["avg_msg_length"] = round(sum(lengths) / len(lengths), 1)
-        stats["max_msg_length"] = max(lengths)
-        stats["total_characters"] = sum(lengths)
-        stats["total_words"] = sum(len(msg.get("Contents", "").split()) for msg in messages if msg.get("Contents"))
-    else:
-        stats["avg_msg_length"] = 0
-        stats["max_msg_length"] = 0
-        stats["total_characters"] = 0
-        stats["total_words"] = 0
-
-    # --- Attachment stats ---
-    attachment_count = sum(1 for msg in messages if msg.get("Attachments"))
+    stats["avg_msg_length"] = round(total_chars / msg_with_content, 1) if msg_with_content else 0
+    stats["max_msg_length"] = max_msg_len
+    stats["total_characters"] = total_chars
+    stats["total_words"] = total_words
     stats["attachment_count"] = attachment_count
-
-    # --- Top words ---
-    word_counter = Counter()
-    stopwords = {
-        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would", "could",
-        "should", "may", "might", "shall", "can", "to", "of", "in", "for",
-        "on", "with", "at", "by", "from", "as", "into", "through", "during",
-        "before", "after", "and", "but", "or", "nor", "not", "so", "yet",
-        "both", "either", "neither", "each", "every", "all", "any", "few",
-        "more", "most", "other", "some", "such", "no", "only", "own", "same",
-        "than", "too", "very", "just", "i", "me", "my", "we", "our", "you",
-        "your", "he", "him", "his", "she", "her", "it", "its", "they", "them",
-        "their", "what", "which", "who", "whom", "this", "that", "these",
-        "those", "am", "if", "then", "else", "when", "up", "out", "about",
-        "how", "why", "where", "there", "here", "also", "like", "oh", "im",
-        "ok", "yeah", "dont", "thats", "lol", "omg", "u", "ur",
-    }
-    for msg in messages:
-        text = msg.get("Contents", "")
-        if not text:
-            continue
-        words = re.findall(r"[a-zA-Z']+", text.lower())
-        for w in words:
-            if len(w) >= 2 and w not in stopwords:
-                word_counter[w] += 1
     stats["top_words"] = word_counter.most_common(30)
-
-    # --- Top emoji ---
-    emoji_pattern = re.compile(
-        "["
-        "\U0001F600-\U0001F64F"  # emoticons
-        "\U0001F300-\U0001F5FF"  # symbols & pictographs
-        "\U0001F680-\U0001F6FF"  # transport & map
-        "\U0001F900-\U0001F9FF"  # supplemental symbols
-        "\U0001FA00-\U0001FA6F"  # chess symbols
-        "\U0001FA70-\U0001FAFF"  # symbols extended
-        "\U00002702-\U000027B0"  # dingbats
-        "\U0000FE00-\U0000FE0F"  # variation selectors
-        "\U0000200D"             # zero width joiner
-        "\U00002640-\U00002642"  # gender symbols
-        "\U00002600-\U000026FF"  # misc symbols
-        "]+",
-        flags=re.UNICODE,
-    )
-    # Also Discord custom emoji :name:
-    discord_emoji_pattern = re.compile(r"<a?:\w+:\d+>|:[a-zA-Z0-9_]+:")
-
-    emoji_counter = Counter()
-    for msg in messages:
-        text = msg.get("Contents", "")
-        if not text:
-            continue
-        for match in emoji_pattern.findall(text):
-            emoji_counter[match] += 1
-        for match in discord_emoji_pattern.findall(text):
-            emoji_counter[match] += 1
     stats["top_emoji"] = emoji_counter.most_common(20)
 
-    # --- Longest streak (consecutive days with messages) ---
-    msg_dates = set()
-    for msg in messages:
-        ts = msg.get("Timestamp", "")
-        if ts:
-            msg_dates.add(ts[:10])
-    sorted_dates = sorted(msg_dates)
+    if min_ts:
+        stats["first_message"] = min_ts
+        stats["last_message"] = max_ts
+        stats["active_days"] = len(day_counts)
+    else:
+        stats["first_message"] = ""
+        stats["last_message"] = ""
+        stats["active_days"] = 0
+
+    # Longest streak
+    sorted_dates = sorted(day_counts.keys())
     longest_streak = 0
     current_streak = 1
     streak_start = sorted_dates[0] if sorted_dates else ""
@@ -285,23 +294,7 @@ def compute_stats(data: dict) -> dict:
     stats["longest_streak"] = longest_streak
     stats["longest_streak_start"] = best_streak_start
 
-    # --- First and last message dates ---
-    timestamps = [msg["Timestamp"] for msg in messages if msg.get("Timestamp")]
-    if timestamps:
-        stats["first_message"] = min(timestamps)
-        stats["last_message"] = max(timestamps)
-        stats["active_days"] = len(msg_dates)
-    else:
-        stats["first_message"] = ""
-        stats["last_message"] = ""
-        stats["active_days"] = 0
-
-    # --- Busiest day ever ---
-    day_counts = Counter()
-    for msg in messages:
-        ts = msg.get("Timestamp", "")
-        if ts:
-            day_counts[ts[:10]] += 1
+    # Busiest day
     if day_counts:
         busiest = day_counts.most_common(1)[0]
         stats["busiest_day"] = busiest[0]
@@ -310,7 +303,6 @@ def compute_stats(data: dict) -> dict:
         stats["busiest_day"] = ""
         stats["busiest_day_count"] = 0
 
-    # --- Night owl vs early bird ---
     night_msgs = sum(hourly.get(h, 0) for h in range(0, 6))
     morning_msgs = sum(hourly.get(h, 0) for h in range(6, 12))
     afternoon_msgs = sum(hourly.get(h, 0) for h in range(12, 18))
@@ -342,51 +334,45 @@ def build_html(stats: dict, user: dict) -> str:
     dow_values = json.dumps([v for _, v in stats["daily_dow"]])
 
     # Top DMs bar chart — use 25 to match the table
-    dm_labels = json.dumps([d["name"][:20] for d in stats["top_dms"][:25]])
-    dm_values = json.dumps([d["count"] for d in stats["top_dms"][:25]])
+    dm_labels = json.dumps([d["name"][:20] for d in stats["top_dms"]])
+    dm_values = json.dumps([d["count"] for d in stats["top_dms"]])
 
     # Top servers bar chart
-    srv_labels = json.dumps([s["name"][:25] for s in stats["top_servers"][:15]])
-    srv_values = json.dumps([s["count"] for s in stats["top_servers"][:15]])
+    srv_labels = json.dumps([s["name"][:25] for s in stats["top_servers"]])
+    srv_values = json.dumps([s["count"] for s in stats["top_servers"]])
 
     # Time of day donut
     tod = stats["time_of_day"]
     tod_labels = json.dumps(["Night (12-6am)", "Morning (6am-12pm)", "Afternoon (12-6pm)", "Evening (6pm-12am)"])
     tod_values = json.dumps([tod["night"], tod["morning"], tod["afternoon"], tod["evening"]])
 
-    # Top words
-    top_words_html = ""
-    for word, count in stats["top_words"]:
-        top_words_html += f'<span class="word-chip">{escape(word)} <b>{count:,}</b></span>'
+    # Chips
+    top_words_html = "".join(
+        f'<span class="word-chip">{escape(w)} <b>{c:,}</b></span>'
+        for w, c in stats["top_words"]
+    )
+    top_emoji_html = "".join(
+        f'<span class="emoji-chip">{escape(e)} <b>{c:,}</b></span>'
+        for e, c in stats["top_emoji"]
+    )
 
-    # Top emoji
-    top_emoji_html = ""
-    for emoji, count in stats["top_emoji"]:
-        top_emoji_html += f'<span class="emoji-chip">{escape(emoji)} <b>{count:,}</b></span>'
+    dm_table = _rank_table_rows(stats["top_dms"])
+    gdm_table = _rank_table_rows(stats["top_group_dms"])
+    ch_table = _rank_table_rows(stats["top_channels"], extra_col="server")
+    srv_table = _rank_table_rows(stats["top_servers"])
 
-    # Top DMs table
-    dm_table = ""
-    for i, d in enumerate(stats["top_dms"][:25], 1):
-        dm_table += f'<tr><td class="rank">{i}</td><td>{escape(d["name"])}</td><td class="num">{d["count"]:,}</td></tr>'
-
-    # Top group DMs table
-    gdm_table = ""
-    for i, d in enumerate(stats["top_group_dms"][:15], 1):
-        gdm_table += f'<tr><td class="rank">{i}</td><td>{escape(d["name"])}</td><td class="num">{d["count"]:,}</td></tr>'
-
-    # Top channels table
-    ch_table = ""
-    for i, c in enumerate(stats["top_channels"][:20], 1):
-        ch_table += f'<tr><td class="rank">{i}</td><td>{escape(c["name"])}</td><td class="server">{escape(c["server"])}</td><td class="num">{c["count"]:,}</td></tr>'
-
-    # Top servers table
-    srv_table = ""
-    for i, s in enumerate(stats["top_servers"][:20], 1):
-        srv_table += f'<tr><td class="rank">{i}</td><td>{escape(s["name"])}</td><td class="num">{s["count"]:,}</td></tr>'
-
-    # Peak hour
     peak_hour = max(stats["hourly"], key=lambda x: x[1])
     peak_dow = max(stats["daily_dow"], key=lambda x: x[1])
+
+    # Night owl vs early bird — compute once
+    tod = stats["time_of_day"]
+    night_total = tod["night"] + tod["evening"]
+    day_total = tod["morning"] + tod["afternoon"]
+    is_night_owl = night_total > day_total
+    persona_label = "Night Owl" if is_night_owl else "Early Bird"
+    persona_icon = "&#x1F989;" if is_night_owl else "&#x1F426;"
+    dominant_period = max(tod, key=tod.get).replace("night", "late night")
+    dominant_pct = f"{max(tod.values()) / sum(tod.values()) * 100:.0f}" if sum(tod.values()) else "0"
 
     return f'''<!DOCTYPE html>
 <html lang="en">
@@ -645,7 +631,7 @@ tr:hover td {{ background: rgba(255,255,255,0.03); }}
     <div class="fact">Favorite day: <span class="val">{peak_dow[0]}</span> ({peak_dow[1]:,} messages)</div>
     <div class="fact">Avg message length: <span class="val">{stats["avg_msg_length"]}</span> chars</div>
     <div class="fact">Longest message: <span class="val">{stats["max_msg_length"]:,}</span> characters</div>
-    <div class="fact">You&rsquo;re a <span class="val">{"Night Owl" if tod["night"] + tod["evening"] > tod["morning"] + tod["afternoon"] else "Early Bird"}</span> &mdash; {tod["night"]+tod["evening"]:,} evening/night vs {tod["morning"]+tod["afternoon"]:,} morning/afternoon messages</div>
+    <div class="fact">You&rsquo;re a <span class="val">{persona_label}</span> &mdash; {night_total:,} evening/night vs {day_total:,} morning/afternoon messages</div>
   </div>
 </div>
 
@@ -669,11 +655,10 @@ tr:hover td {{ background: rgba(255,255,255,0.03); }}
     <div class="chart-box"><canvas id="todChart"></canvas></div>
     <div class="persona-box">
       <div style="text-align:center;">
-        <div class="persona-icon">{"&#x1F989;" if tod["night"] + tod["evening"] > tod["morning"] + tod["afternoon"] else "&#x1F426;"}</div>
-        <div class="persona-label">{"Night Owl" if tod["night"] + tod["evening"] > tod["morning"] + tod["afternoon"] else "Early Bird"}</div>
+        <div class="persona-icon">{persona_icon}</div>
+        <div class="persona-label">{persona_label}</div>
         <div class="persona-detail">
-          {max(tod.values()) / sum(tod.values()) * 100:.0f}% of your messages are in the
-          {max(tod, key=tod.get).replace("night","late night").replace("evening","evening")} hours
+          {dominant_pct}% of your messages are in the {dominant_period} hours
         </div>
       </div>
     </div>
@@ -750,13 +735,33 @@ Chart.defaults.color = "#8b8ba7";
 Chart.defaults.borderColor = "rgba(255,255,255,0.05)";
 Chart.defaults.font.family = "'DM Sans', system-ui, sans-serif";
 const accent = "#6ea8fe";
-const accentAlpha = "rgba(110,168,254,0.25)";
 const rose = "#ff6b8a";
 const amber = "#fbbf24";
-const teal = "#2dd4bf";
 function fmtNum(v) {{ return v.toLocaleString(); }}
 function widenAxis(axis) {{ if (axis.width < 58) axis.width = 58; }}
 function widenLabelAxis(axis) {{ if (axis.width < 180) axis.width = 180; }}
+const yFmt = {{ afterFit: widenAxis, beginAtZero: true, ticks: {{ font: {{ size: 12 }}, callback: function(v) {{ return fmtNum(v); }} }}, grid: {{ color: "rgba(255,255,255,0.03)" }} }};
+const xHidden = {{ grid: {{ display: false }}, ticks: {{ font: {{ size: 12 }} }} }};
+
+function barChart(id, labels, data, color, opts) {{
+  const horizontal = opts && opts.horizontal;
+  const cfg = {{
+    type: "bar",
+    data: {{ labels, datasets: [{{ label: "Messages", data, backgroundColor: color, borderRadius: 6, borderSkipped: false }}] }},
+    options: {{
+      indexAxis: horizontal ? "y" : "x",
+      plugins: {{ legend: {{ display: false }} }},
+      scales: horizontal
+        ? {{ x: yFmt, y: {{ afterFit: widenLabelAxis, grid: {{ display: false }}, ticks: {{ font: {{ size: 12 }} }} }} }}
+        : {{ x: xHidden, y: yFmt }}
+    }}
+  }};
+  if (horizontal) cfg.options.layout = {{ padding: {{ right: 120 }} }};
+  if (opts && opts.title) {{
+    cfg.options.plugins.title = {{ display: true, text: opts.title, font: {{ family: "'Outfit', sans-serif", size: 13, weight: 400 }}, padding: {{ bottom: 12 }} }};
+  }}
+  return new Chart(document.getElementById(id), cfg);
+}}
 
 // Monthly activity
 new Chart(document.getElementById("monthlyChart"), {{
@@ -777,52 +782,16 @@ new Chart(document.getElementById("monthlyChart"), {{
     }}]
   }},
   options: {{
-
     plugins: {{ legend: {{ display: false }} }},
     scales: {{
       x: {{ ticks: {{ maxTicksLimit: 18, font: {{ size: 12 }} }}, grid: {{ display: false }} }},
-      y: {{ afterFit: widenAxis, beginAtZero: true, ticks: {{ font: {{ size: 12 }}, callback: function(v) {{ return fmtNum(v); }} }}, grid: {{ color: "rgba(255,255,255,0.03)" }} }}
+      y: yFmt
     }}
   }}
 }});
 
-// Hourly activity
-new Chart(document.getElementById("hourlyChart"), {{
-  type: "bar",
-  data: {{
-    labels: {hourly_labels},
-    datasets: [{{ label: "Messages", data: {hourly_values}, backgroundColor: accent, borderRadius: 6, borderSkipped: false }}]
-  }},
-  options: {{
-    plugins: {{
-      legend: {{ display: false }},
-      title: {{ display: true, text: "By Hour of Day", font: {{ family: "'Outfit', sans-serif", size: 13, weight: 400 }}, padding: {{ bottom: 12 }} }}
-    }},
-    scales: {{
-      x: {{ grid: {{ display: false }}, ticks: {{ font: {{ size: 11 }} }} }},
-      y: {{ afterFit: widenAxis, beginAtZero: true, ticks: {{ font: {{ size: 12 }}, callback: function(v) {{ return fmtNum(v); }} }}, grid: {{ color: "rgba(255,255,255,0.03)" }} }}
-    }}
-  }}
-}});
-
-// Day of week
-new Chart(document.getElementById("dowChart"), {{
-  type: "bar",
-  data: {{
-    labels: {dow_labels},
-    datasets: [{{ label: "Messages", data: {dow_values}, backgroundColor: rose, borderRadius: 6, borderSkipped: false }}]
-  }},
-  options: {{
-    plugins: {{
-      legend: {{ display: false }},
-      title: {{ display: true, text: "By Day of Week", font: {{ family: "'Outfit', sans-serif", size: 13, weight: 400 }}, padding: {{ bottom: 12 }} }}
-    }},
-    scales: {{
-      x: {{ grid: {{ display: false }}, ticks: {{ font: {{ size: 12 }} }} }},
-      y: {{ afterFit: widenAxis, beginAtZero: true, ticks: {{ font: {{ size: 12 }}, callback: function(v) {{ return fmtNum(v); }} }}, grid: {{ color: "rgba(255,255,255,0.03)" }} }}
-    }}
-  }}
-}});
+barChart("hourlyChart", {hourly_labels}, {hourly_values}, accent, {{ title: "By Hour of Day" }});
+barChart("dowChart", {dow_labels}, {dow_values}, rose, {{ title: "By Day of Week" }});
 
 // Time of day donut
 new Chart(document.getElementById("todChart"), {{
@@ -837,47 +806,13 @@ new Chart(document.getElementById("todChart"), {{
     }}]
   }},
   options: {{
-
     plugins: {{ legend: {{ position: "bottom", labels: {{ padding: 16, usePointStyle: true, pointStyle: "circle", font: {{ size: 13 }} }} }} }},
     cutout: "65%"
   }}
 }});
 
-// Top DMs
-new Chart(document.getElementById("dmChart"), {{
-  type: "bar",
-  data: {{
-    labels: {dm_labels},
-    datasets: [{{ label: "Messages", data: {dm_values}, backgroundColor: rose, borderRadius: 6, borderSkipped: false }}]
-  }},
-  options: {{
-    indexAxis: "y",
-    layout: {{ padding: {{ right: 120 }} }},
-    plugins: {{ legend: {{ display: false }} }},
-    scales: {{
-      x: {{ afterFit: widenAxis, beginAtZero: true, ticks: {{ font: {{ size: 12 }}, callback: function(v) {{ return fmtNum(v); }} }}, grid: {{ color: "rgba(255,255,255,0.03)" }} }},
-      y: {{ afterFit: widenLabelAxis, grid: {{ display: false }}, ticks: {{ font: {{ size: 12 }} }} }}
-    }}
-  }}
-}});
-
-// Top Servers
-new Chart(document.getElementById("srvChart"), {{
-  type: "bar",
-  data: {{
-    labels: {srv_labels},
-    datasets: [{{ label: "Messages", data: {srv_values}, backgroundColor: accent, borderRadius: 6, borderSkipped: false }}]
-  }},
-  options: {{
-    indexAxis: "y",
-    layout: {{ padding: {{ right: 120 }} }},
-    plugins: {{ legend: {{ display: false }} }},
-    scales: {{
-      x: {{ afterFit: widenAxis, beginAtZero: true, ticks: {{ font: {{ size: 12 }}, callback: function(v) {{ return fmtNum(v); }} }}, grid: {{ color: "rgba(255,255,255,0.03)" }} }},
-      y: {{ afterFit: widenLabelAxis, grid: {{ display: false }}, ticks: {{ font: {{ size: 12 }} }} }}
-    }}
-  }}
-}});
+barChart("dmChart", {dm_labels}, {dm_values}, rose, {{ horizontal: true }});
+barChart("srvChart", {srv_labels}, {srv_values}, accent, {{ horizontal: true }});
 </script>
 </body>
 </html>'''
